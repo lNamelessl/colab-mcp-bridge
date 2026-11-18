@@ -213,15 +213,18 @@ class JupyterClient:
         caller (execution record) can read partial output while the job runs.
         """
         kernel_id = (session.get("kernel") or {}).get("id")
-        session_id = session.get("id")
-        if not kernel_id or not session_id:
-            raise JupyterError("Session payload missing kernel/session id")
+        if not kernel_id:
+            raise JupyterError("Session payload missing kernel id")
         base, token = self._conn()
+        # ONE client session id for both the channels URL (?session_id=) and
+        # every message header.session — jupyterlab semantics. Colab's proxy
+        # closes sockets whose message session and URL session disagree
+        # (verified live: abrupt ConnectionClosedError after the first output).
+        client_session = uuid.uuid4().hex
         ws_url = (
             f"{base.replace('https://', 'wss://').replace('http://', 'ws://')}"
-            f"/api/kernels/{kernel_id}/channels?session_id={quote(str(session_id))}"
+            f"/api/kernels/{kernel_id}/channels?session_id={quote(client_session)}"
         )
-        client_session = uuid.uuid4().hex
         msg_id = uuid.uuid4().hex
         started = asyncio.get_event_loop().time()
 
@@ -317,6 +320,18 @@ class JupyterClient:
                     raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
                 except (asyncio.TimeoutError, TimeoutError):
                     result["status"] = "timeout"
+                    return result
+                except websockets.exceptions.ConnectionClosed as exc:
+                    result["status"] = "error"
+                    result["error"] = {
+                        "ename": exc.__class__.__name__,
+                        "evalue": str(exc),
+                        "traceback": "",
+                    }
+                    result["notes"].append(
+                        "[bridge] kernel socket closed before the execute_reply; "
+                        "partial output kept. Re-run the call to retry."
+                    )
                     return result
                 try:
                     msg = json.loads(raw)
