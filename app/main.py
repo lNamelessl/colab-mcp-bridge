@@ -584,18 +584,18 @@ form{{margin-top:1rem}} textarea{{width:100%;height:5rem}} button{{padding:.5rem
 _NOT_CONNECTED_BODY = """<p><span class="badge">step 1 of 2</span> Open this Google consent URL in any browser (same one you use for Colab is fine):</p>
 <p><a href="{consent_url}" rel="noopener noreferrer">Approve access on Google's consent page</a></p>
 <pre>{consent_url}</pre>
-<p><span class="badge">step 2 of 2</span> After approving, Google shows an authorization code. Paste it here:</p>
+<p><span class="badge">step 2 of 2</span> After approving, your browser will land on a <b>"can't connect" page at localhost:8080</b> — that is expected (nothing listens there). Copy the authorization <b>code from the browser's ADDRESS BAR</b>: the URL ends with <code>...&amp;code=4/0A...</code> — copy everything after <code>code=</code> (it starts with <code>4/0A</code>) and paste it below:</p>
 <form method="post" action="/connect">
 <label for="code">Authorization code</label><br>
-<textarea id="code" name="code" placeholder="paste the code Google displayed"></textarea><br>
+<textarea id="code" name="code" placeholder="4/0A..."></textarea><br>
 <button type="submit">Connect</button>
 </form>
-<p style="color:#666">The bridge exchanges the code server-side and stores the refresh token encrypted on its volume. The agent never sees Google credentials.</p>"""
+<p style="color:#666">The bridge exchanges the code server-side and stores the refresh token encrypted on its volume. The agent never sees Google credentials. (Using a different port? Set GOOGLE_OAUTH_REDIRECT_URI to match — Google's client accepts any localhost port.)</p>"""
 
 _CONNECTED_BODY = """<p class="ok">Connected. The Google refresh token is stored encrypted on the bridge's volume.</p>
-<p>MCP endpoint (keep it private): <code>https://&lt;your-domain&gt;{mcp_path}</code></p>
+<p>MCP endpoint (keep it private): <code>https://YOUR-DOMAIN{mcp_path}</code></p>
 <p>Health: <a href="/health">/health</a></p>
-<p>To re-authorize (e.g. after revoking access), paste a fresh code below:</p>
+<p>To re-authorize (e.g. after revoking access): open the consent URL from the connect page again, and paste the <code>code=</code> value from the browser's address bar below:</p>
 <form method="post" action="/connect">
 <label for="code">Authorization code</label><br>
 <textarea id="code" name="code"></textarea><br>

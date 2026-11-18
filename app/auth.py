@@ -1,14 +1,18 @@
 """Google OAuth for the Colab MCP bridge.
 
-The bridge runs the gcloud-style *copy-paste* consent flow (the same mechanism
-``gcloud auth application-default login`` and colab-cli use — colab-cli's
-``_run_remote_flow``): the /connect page shows a consent URL bound to Google's
-public cloud-SDK OAuth client and the ``applicationdefaultauthcode.html``
-landing page; the user consents in ANY browser, Google displays an
-authorization code, and the code is pasted back into /connect. The bridge
-exchanges it server-side and stores the refresh token encrypted on the volume
-(``store.TokenStore``). google-auth then refreshes access tokens server-side
-forever — the agent never sees Google credentials.
+The bridge uses the *loopback copy-paste* consent flow: the /connect page
+shows a consent URL bound to Google's public cloud-SDK OAuth client with
+``redirect_uri=http://localhost:8080`` (Google's own client accepts any
+localhost loopback port — verified live; the old sdk.cloud.google.com
+ADC landing page registration was REVOKED by Google and returns
+``redirect_uri_mismatch``). After approval the browser lands on a
+"can't connect" page at localhost (nothing is listening there) and the
+user copies the ``code=4/0A...`` parameter from the ADDRESS BAR into the
+/connect form. The bridge exchanges the code server-side — the token
+request MUST carry the exact same redirect_uri — and stores the refresh
+token encrypted on the volume (``store.TokenStore``). google-auth then
+refreshes access tokens server-side forever — the agent never sees
+Google credentials.
 
 Scope set (colab-cli PUBLIC_SCOPES minus drive.file/profile):
   openid, cloud-platform, userinfo.email, colaboratory
@@ -16,9 +20,8 @@ Scope set (colab-cli PUBLIC_SCOPES minus drive.file/profile):
 The cloud-SDK client id/secret are Google's own published values (shipped in
 colab-cli's oauth_config.json) — they are public by construction. They can be
 overridden via GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
-GOOGLE_OAUTH_REDIRECT_URI, but the gcloud landing-page redirect only accepts
-Google's own client; overriding the client means registering your own redirect
-URI instead.
+GOOGLE_OAUTH_REDIRECT_URI (any localhost port works with Google's client;
+a custom non-loopback redirect requires your own registered client).
 """
 
 from __future__ import annotations
@@ -40,7 +43,9 @@ DEFAULT_CLIENT_ID = (
     "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"
 )
 DEFAULT_CLIENT_SECRET = "d-FL95Q19q7MQmFpd7hHD0Ty"
-DEFAULT_REDIRECT_URI = "https://sdk.cloud.google.com/applicationdefaultauthcode.html"
+# Loopback redirect accepted by Google's cloud-SDK client (the former
+# sdk.cloud.google.com ADC landing page now returns redirect_uri_mismatch).
+DEFAULT_REDIRECT_URI = "http://localhost:8080"
 
 SCOPES = [
     "openid",

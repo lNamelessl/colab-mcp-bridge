@@ -3,8 +3,8 @@
 Deploy the Colab MCP Bridge with one click — zero deploy-form prompts (`SECRET_PATH`, `TOKEN_SECRET` and `MCP_TOKEN` are generated per deployment and visible on the service's Variables tab). After the deploy goes active:
 
 1. Open `https://YOUR-DOMAIN.up.railway.app/connect` in any browser (domain under Settings → Networking).
-2. Click the consent link — Google's gcloud-style copy-paste consent page opens. Approve access for your Colab account (scopes: openid, cloud-platform, userinfo.email, colaboratory).
-3. Paste the authorization code Google displays into the /connect form. Done: the bridge exchanges the code and stores the refresh token encrypted (Fernet, key derived from TOKEN_SECRET) on the /data volume. google-auth refreshes access tokens server-side forever.
+2. Click the consent link — Google's consent page opens (bound to Google's own cloud-SDK OAuth client, so there is no OAuth client registration to do). Approve access for your Colab account (scopes: openid, cloud-platform, userinfo.email, colaboratory).
+3. After approving, your browser lands on a "can't connect" page at localhost:8080 — that is expected (nothing listens there). Copy the authorization code from the browser's ADDRESS BAR: the URL ends with ...code=4/0A... — copy everything after code= and paste it into the /connect form. Done: the bridge exchanges the code (echoing the exact loopback redirect_uri) and stores the refresh token encrypted (Fernet, key derived from TOKEN_SECRET) on the /data volume. google-auth refreshes access tokens server-side forever.
 4. Point your MCP client at `https://YOUR-DOMAIN.up.railway.app/SECRET_PATH/mcp`.
 
 Client configuration:

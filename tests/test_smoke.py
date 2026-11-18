@@ -53,10 +53,51 @@ def test_consent_url(env):
     url = env.AUTH.consent_url()
     assert "accounts.google.com/o/oauth2/auth" in url
     assert "client_id=764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur" in url
-    assert "redirect_uri=https%3A%2F%2Fsdk.cloud.google.com" in url
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A8080" in url
     assert "colaboratory" in url
     assert "access_type=offline" in url and "prompt=consent" in url
     assert "token_usage=remote" in url
+
+
+def test_exchange_carries_matching_redirect(env, monkeypatch):
+    """The token request must echo the exact redirect_uri of the auth request."""
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        content = b"{}"
+        text = "{}"
+
+        def json(self):
+            return {"refresh_token": "rt", "access_token": "at", "scope": "s"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, data=None, headers=None):
+            captured["url"] = url
+            captured["data"] = data
+            return FakeResp()
+
+    monkeypatch.setattr("app.auth.httpx.AsyncClient", FakeClient)
+    env.AUTH._creds = None
+    import asyncio
+
+    from app.auth import TOKEN_URI
+
+    asyncio.run(env.AUTH.connect("4/0ATESTCODE"))
+    assert captured["url"] == TOKEN_URI
+    assert captured["data"]["redirect_uri"] == "http://localhost:8080"
+    assert captured["data"]["code"] == "4/0ATESTCODE"
+    assert captured["data"]["grant_type"] == "authorization_code"
+    assert env.AUTH.connected()
 
 
 def test_variant_mapping():

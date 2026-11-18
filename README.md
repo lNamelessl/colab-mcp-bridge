@@ -19,9 +19,9 @@ The bridge implements the Colab toolset **directly over the official v1beta REST
 ## Quick start
 
 1. Deploy to Railway (button above) — **zero deploy-form prompts**: `SECRET_PATH`, `TOKEN_SECRET` and `MCP_TOKEN` are generated per deployment and visible on the service's **Variables** tab.
-2. Open `https://<your-domain>/connect` in any browser. The page shows a Google consent URL (the gcloud-style copy-paste flow, bound to Google's own cloud-SDK OAuth client — no OAuth client registration needed).
-3. Approve the consent (scopes: `openid`, `cloud-platform`, `userinfo.email`, `colaboratory`). Google displays an authorization code — paste it into the /connect form.
-4. The bridge exchanges the code and stores the **refresh token encrypted** (Fernet, key derived from `TOKEN_SECRET`) at `/data/token.enc` on your volume. google-auth refreshes access tokens server-side forever.
+2. Open `https://<your-domain>/connect` in any browser. The page shows a Google consent URL bound to Google's own cloud-SDK OAuth client — no OAuth client registration needed.
+3. Approve the consent (scopes: `openid`, `cloud-platform`, `userinfo.email`, `colaboratory`). After approving, your browser lands on a "can't connect" page at `localhost:8080` — that is expected (nothing listens there). **Copy the authorization code from the browser's ADDRESS BAR**: the URL ends with `...&code=4/0A...` — copy everything after `code=` and paste it into the /connect form.
+4. The bridge exchanges the code (the token request echoes the exact loopback redirect_uri) and stores the **refresh token encrypted** (Fernet, key derived from `TOKEN_SECRET`) at `/data/token.enc` on your volume. google-auth refreshes access tokens server-side forever.
 5. Point your MCP client at `https://<your-domain>/<SECRET_PATH>/mcp`.
 
 ## MCP client configuration
@@ -82,7 +82,7 @@ colab_execute_code {"code": "import torch; print(torch.cuda.is_available(), torc
 | `DEFAULT_ACCELERATOR` | `T4` | Accelerator used when the bridge auto-creates a runtime. |
 | `DEFAULT_SHAPE` | `STANDARD` | Runtime shape (STANDARD / HIGHMEM). |
 | `EXEC_TIMEOUT_DEFAULT` / `EXEC_TIMEOUT_MAX` | `600` / `3600` | Per-call wait bounds for long-running executions. |
-| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` | Google's public cloud-SDK client | Only override if you have an allowlisted Colab API client with your own redirect URI (the gcloud landing-page redirect only accepts Google's own client). |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` | Google's public cloud-SDK client / `http://localhost:8080` | Override only if you have an allowlisted Colab API client with your own redirect URI. Google's client accepts any localhost port — set `GOOGLE_OAUTH_REDIRECT_URI` (e.g. `http://localhost:9933`) and the /connect page + token exchange stay in sync automatically. |
 
 ## Honest limits
 
