@@ -1,5 +1,7 @@
 # Colab MCP Bridge
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/colab-mcp-bridge)
+
 A self-hosted MCP server that lets **any AI agent** (Claude Code, Cursor, ChatGPT connectors, any streamable-HTTP MCP client) execute Python code on **Google Colab GPU runtimes** — including the free tier's T4. The bridge holds your Google OAuth tokens server-side, so the agent never sees Google credentials, and it never needs a client that can perform Google OAuth itself (Google's hosted Colab MCP requires exactly that, which is why ChatGPT and Cursor cannot connect to it directly).
 
 - Repo: https://github.com/lNamelessl/colab-mcp-bridge
