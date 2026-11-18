@@ -59,6 +59,14 @@ def variant_for_accelerator(accelerator: str) -> str:
     return VARIANT_GPU
 
 
+def shape_enum(shape: str) -> str:
+    """Normalize a shape to the API enum (SHAPE_STANDARD / SHAPE_HIGHMEM)."""
+    s = (shape or "").strip().upper()
+    if not s.startswith("SHAPE_"):
+        s = "SHAPE_" + s
+    return s if s in ("SHAPE_STANDARD", "SHAPE_HIGHMEM") else "SHAPE_STANDARD"
+
+
 def _parse_expiry(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -195,7 +203,7 @@ class ColabAPI:
             "runtimeSpec": {
                 "variant": variant or variant_for_accelerator(accelerator),
                 "accelerator": (accelerator or "NONE").strip().upper(),
-                "shape": shape,
+                "shape": shape_enum(shape),
             }
         }
         op = await self.request("POST", "/v1beta/runtimes", params=params, json_body=body)

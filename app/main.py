@@ -454,7 +454,7 @@ async def colab_create_runtime(
         return {"error": _connected_hint()}
     acc = (accelerator or "T4").strip().upper()
     shp = (shape or "STANDARD").strip().upper()
-    if shp not in ("STANDARD", "HIGHMEM"):
+    if shp not in ("STANDARD", "HIGHMEM", "SHAPE_STANDARD", "SHAPE_HIGHMEM"):
         raise ToolError("shape must be STANDARD or HIGHMEM.")
     rid = (runtime_id or "").strip() or None
     try:
