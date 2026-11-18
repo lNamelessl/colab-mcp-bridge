@@ -80,6 +80,22 @@ REGISTRY = ExecutionRegistry()
 SESSION_LOCKS: dict[str, asyncio.Lock] = {}
 _REFRESHER_TASK: asyncio.Task | None = None
 
+# Headless connect: GOOGLE_CREDENTIALS_JSON (a full authorized_user credential
+# JSON, e.g. from `gcloud auth application-default login`) is stored at boot
+# when no token.enc exists yet — keeps fresh-deploy verification / IaC deploys
+# fully unattended.
+_GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "").strip()
+if _GOOGLE_CREDENTIALS_JSON and not AUTH.connected():
+    try:
+        result = AUTH.connect_credentials_json(_GOOGLE_CREDENTIALS_JSON)
+        print(
+            f"boot: stored GOOGLE_CREDENTIALS_JSON (quota project: "
+            f"{result.get('quota_project')})",
+            flush=True,
+        )
+    except AuthError as exc:
+        print(f"boot: GOOGLE_CREDENTIALS_JSON invalid: {exc}", file=sys.stderr, flush=True)
+
 
 def _session_lock(session_name: str) -> asyncio.Lock:
     if session_name not in SESSION_LOCKS:
@@ -581,16 +597,17 @@ form{{margin-top:1rem}} textarea{{width:100%;height:5rem}} button{{padding:.5rem
 {body}
 </body></html>"""
 
-_NOT_CONNECTED_BODY = """<p><span class="badge">step 1 of 2</span> Open this Google consent URL in any browser (same one you use for Colab is fine):</p>
+_NOT_CONNECTED_BODY = """<p><span class="badge">option A</span> Open this Google consent URL in any browser (same one you use for Colab is fine):</p>
 <p><a href="{consent_url}" rel="noopener noreferrer">Approve access on Google's consent page</a></p>
 <pre>{consent_url}</pre>
-<p><span class="badge">step 2 of 2</span> After approving, your browser will land on a <b>"can't connect" page at localhost:8080</b> — that is expected (nothing listens there). Copy the authorization <b>code from the browser's ADDRESS BAR</b>: the URL ends with <code>...&amp;code=4/0A...</code> — copy everything after <code>code=</code> (it starts with <code>4/0A</code>) and paste it below:</p>
+<p>After approving, your browser will land on a <b>"can't connect" page at localhost:8080</b> — that is expected (nothing listens there). Copy the authorization <b>code from the browser's ADDRESS BAR</b>: the URL ends with <code>...&amp;code=4/0A...</code> — copy everything after <code>code=</code> (it starts with <code>4/0A</code>) and paste it below:</p>
+<p><span class="badge">option B</span> Already ran <code>gcloud auth application-default login</code>? Paste the full ADC credential JSON instead (it starts with <code>{{"refresh_token"</code> ... and contains <code>"type": "authorized_user"</code>). The form auto-detects which payload you pasted:</p>
 <form method="post" action="/connect">
-<label for="code">Authorization code</label><br>
-<textarea id="code" name="code" placeholder="4/0A..."></textarea><br>
+<label for="code">Authorization code or credential JSON</label><br>
+<textarea id="code" name="code" placeholder="4/0A... or the full ADC JSON"></textarea><br>
 <button type="submit">Connect</button>
 </form>
-<p style="color:#666">The bridge exchanges the code server-side and stores the refresh token encrypted on its volume. The agent never sees Google credentials. (Using a different port? Set GOOGLE_OAUTH_REDIRECT_URI to match — Google's client accepts any localhost port.)</p>"""
+<p style="color:#666">The bridge exchanges the code server-side and stores the refresh token encrypted on its volume. The agent never sees Google credentials. (Using a different port? Set GOOGLE_OAUTH_REDIRECT_URI to match — Google's client accepts any localhost port.) You can also deploy with GOOGLE_CREDENTIALS_JSON set to skip this page entirely.</p>"""
 
 _CONNECTED_BODY = """<p class="ok">Connected. The Google refresh token is stored encrypted on the bridge's volume.</p>
 <p>MCP endpoint (keep it private): <code>https://YOUR-DOMAIN{mcp_path}</code></p>
@@ -629,6 +646,7 @@ async def health(request):  # noqa: ANN001 - Starlette handler
             "token_valid": creds_ok,
             "bearer_gate": bool(MCP_TOKEN),
             "runtime_cached": RUNTIMES.runtime_id(),
+            "quota_project": AUTH.quota_project() if AUTH.connected() else None,
             "data_dir": STORE.dir,
         }
     )
@@ -643,6 +661,7 @@ async def connect(request):  # noqa: ANN001 - Starlette handler
                 {
                     "connected": AUTH.connected(),
                     "consent_url": AUTH.consent_url(),
+                    "quota_project": AUTH.quota_project() if AUTH.connected() else None,
                 }
             )
         body = _CONNECTED_BODY.format(mcp_path=MCP_PATH) if AUTH.connected() else _NOT_CONNECTED_BODY.format(
@@ -665,13 +684,19 @@ async def connect(request):  # noqa: ANN001 - Starlette handler
         except Exception:  # noqa: BLE001 — malformed form
             code = ""
     try:
-        await AUTH.connect(code)
+        if code.startswith("{"):
+            result = AUTH.connect_credentials_json(code)
+            enable = await AUTH.enable_colab_api(force=True)
+            result["colab_api"] = enable
+        else:
+            result = await AUTH.connect(code)
+        _ = result  # page content is identical; result carries quota/enable info
     except AuthError as exc:
         if want_json:
             return JSONResponse({"connected": False, "error": str(exc)}, status_code=400)
         return _html(_page(_ERROR_BODY.format(message=html.escape(str(exc)))))
     if want_json:
-        return JSONResponse({"connected": True})
+        return JSONResponse({"connected": True, "quota_project": AUTH.quota_project()})
     return _html(_page(_CONNECTED_BODY.format(mcp_path=MCP_PATH)))
 
 

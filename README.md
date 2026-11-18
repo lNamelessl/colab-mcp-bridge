@@ -19,9 +19,11 @@ The bridge implements the Colab toolset **directly over the official v1beta REST
 ## Quick start
 
 1. Deploy to Railway (button above) — **zero deploy-form prompts**: `SECRET_PATH`, `TOKEN_SECRET` and `MCP_TOKEN` are generated per deployment and visible on the service's **Variables** tab.
-2. Open `https://<your-domain>/connect` in any browser. The page shows a Google consent URL bound to Google's own cloud-SDK OAuth client — no OAuth client registration needed.
-3. Approve the consent (scopes: `openid`, `cloud-platform`, `userinfo.email`, `colaboratory`). After approving, your browser lands on a "can't connect" page at `localhost:8080` — that is expected (nothing listens there). **Copy the authorization code from the browser's ADDRESS BAR**: the URL ends with `...&code=4/0A...` — copy everything after `code=` and paste it into the /connect form.
-4. The bridge exchanges the code (the token request echoes the exact loopback redirect_uri) and stores the **refresh token encrypted** (Fernet, key derived from `TOKEN_SECRET`) at `/data/token.enc` on your volume. google-auth refreshes access tokens server-side forever.
+2. Open `https://<your-domain>/connect` in any browser. Two paste paths, auto-detected:
+   - **Consent code**: the page shows a consent URL bound to Google's own cloud-SDK OAuth client (no OAuth client registration needed). Approve the consent (scopes: `openid`, `cloud-platform`, `userinfo.email`, `colaboratory`); the browser lands on a "can't connect" page at `localhost:8080` — expected (nothing listens there). Copy the `code=4/0A...` value from the ADDRESS BAR and paste it.
+   - **ADC credential JSON**: already ran `gcloud auth application-default login`? Paste the full authorized_user JSON instead.
+3. The bridge exchanges the code (the token request echoes the exact loopback redirect_uri) or imports the JSON, stores the **refresh token encrypted** (Fernet, key derived from `TOKEN_SECRET`) at `/data/token.enc` on your volume, and auto-enables `colaboratory.googleapis.com` on the quota project. google-auth refreshes access tokens server-side forever.
+4. Headless alternative: deploy with `GOOGLE_CREDENTIALS_JSON` set to a full authorized_user credential JSON — the bridge stores it at boot and `/connect` is never needed. ADC user credentials need a **quota project** for the Colab API (set `QUOTA_PROJECT_ID` to a GCP project that has the Colab API enabled; a credential's own `quota_project_id` field wins; the /connect flow auto-enables the API on it via ServiceUsage).
 5. Point your MCP client at `https://<your-domain>/<SECRET_PATH>/mcp`.
 
 ## MCP client configuration
@@ -83,6 +85,8 @@ colab_execute_code {"code": "import torch; print(torch.cuda.is_available(), torc
 | `DEFAULT_SHAPE` | `STANDARD` | Runtime shape (STANDARD / HIGHMEM). |
 | `EXEC_TIMEOUT_DEFAULT` / `EXEC_TIMEOUT_MAX` | `600` / `3600` | Per-call wait bounds for long-running executions. |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` | Google's public cloud-SDK client / `http://localhost:8080` | Override only if you have an allowlisted Colab API client with your own redirect URI. Google's client accepts any localhost port — set `GOOGLE_OAUTH_REDIRECT_URI` (e.g. `http://localhost:9933`) and the /connect page + token exchange stay in sync automatically. |
+| `GOOGLE_CREDENTIALS_JSON` | unset | Headless connect: a full `authorized_user` credential JSON (from `gcloud auth application-default login`). Stored encrypted at boot when no token.enc exists. |
+| `QUOTA_PROJECT_ID` | credential's `quota_project_id` or a default | GCP project used as the Colab API quota project (ADC user credentials 403 SERVICE_DISABLED without one). The /connect flow auto-enables the Colab API on it via ServiceUsage. |
 
 ## Honest limits
 

@@ -47,6 +47,12 @@ DEFAULT_CLIENT_SECRET = "d-FL95Q19q7MQmFpd7hHD0Ty"
 # sdk.cloud.google.com ADC landing page now returns redirect_uri_mismatch).
 DEFAULT_REDIRECT_URI = "http://localhost:8080"
 
+# Colab API quota project: ADC user credentials WITHOUT a quota project get
+# PERMISSION_DENIED / SERVICE_DISABLED ("requires a quota project") from
+# colaboratory.googleapis.com. Resolution order: the credential's own
+# quota_project_id field -> QUOTA_PROJECT_ID env -> this constant.
+DEFAULT_QUOTA_PROJECT = "project-05b09e41-482f-4259-8d9"
+
 SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/cloud-platform",
@@ -56,6 +62,10 @@ SCOPES = [
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+SERVICEUSAGE_ENABLE_URL = (
+    "https://serviceusage.googleapis.com/v1/projects/{project}/services/"
+    "colaboratory.googleapis.com:enable"
+)
 
 
 class AuthError(Exception):
@@ -66,8 +76,18 @@ def _env(key: str, default: str) -> str:
     return os.environ.get(key, "").strip() or default
 
 
+def _serialize_credentials(creds: Credentials) -> str:
+    """creds.to_json() DROPS quota_project_id (google-auth 2.40.3) — re-inject
+    it so the Colab API quota project survives restarts (from_authorized_user_info
+    restores it)."""
+    data = json.loads(creds.to_json())
+    if creds.quota_project_id:
+        data["quota_project_id"] = creds.quota_project_id
+    return json.dumps(data)
+
+
 class AuthManager:
-    """Consent-URL builder, code exchanger, and credential refresher."""
+    """Consent-URL builder, code exchanger, credential-JSON importer, refresher."""
 
     def __init__(self, store: TokenStore) -> None:
         self._store = store
@@ -76,6 +96,42 @@ class AuthManager:
         self._redirect_uri = _env("GOOGLE_OAUTH_REDIRECT_URI", DEFAULT_REDIRECT_URI)
         self._creds: Credentials | None = None
         self._refresh_lock = asyncio.Lock()
+        self._enable_attempted = False
+
+    def quota_project(self) -> str:
+        """Resolved Colab API quota project (credential field -> env -> default)."""
+        if self._creds is None:
+            self.load_credentials()
+        creds_qp = getattr(self._creds, "quota_project_id", None)
+        return (creds_qp or _env("QUOTA_PROJECT_ID", "") or DEFAULT_QUOTA_PROJECT).strip()
+
+    async def enable_colab_api(self, force: bool = False) -> dict:
+        """Best-effort serviceusage enable of colaboratory.googleapis.com on the
+        quota project (requires cloud-platform scope on the credential)."""
+        project = self.quota_project()
+        if not project or (self._enable_attempted and not force):
+            return {"attempted": self._enable_attempted, "enabled": None, "project": project}
+        self._enable_attempted = True
+        try:
+            creds = await self.fresh_credentials()
+        except AuthError as exc:
+            return {"attempted": True, "enabled": False, "error": str(exc), "project": project}
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                SERVICEUSAGE_ENABLE_URL.format(project=project),
+                headers={
+                    "Authorization": f"Bearer {creds.token}",
+                    "x-goog-user-project": project,
+                },
+            )
+        ok = resp.status_code in (200, 409)  # 409 = already enabled / long-running done
+        return {
+            "attempted": True,
+            "enabled": ok,
+            "project": project,
+            "status": resp.status_code if not ok else None,
+            "detail": None if ok else resp.text[:200],
+        }
 
     # ------------------------------------------------------------------ #
     # Copy-paste consent flow
@@ -138,8 +194,49 @@ class AuthManager:
             expiry=None,
         )
         self._creds = creds
-        self._store.save_token(creds.to_json())
-        return {"connected": True, "scopes": payload.get("scope", "")}
+        self._store.save_token(_serialize_credentials(creds))
+        enable = await self.enable_colab_api(force=True)
+        return {"connected": True, "scopes": payload.get("scope", ""), "colab_api": enable}
+
+    def connect_credentials_json(self, raw: str) -> dict:
+        """Store a full authorized_user credential JSON (ADC paste fallback).
+
+        Accepts exactly the JSON produced by `gcloud auth application-default
+        login` (printed ADC files) or `gcloud auth print-access-token`-style
+        authorized_user files: refresh_token + client_id + client_secret +
+        token_uri + scopes (+ optional quota_project_id, which wins for the
+        Colab API quota project).
+        """
+        raw = (raw or "").strip()
+        if not raw.startswith("{"):
+            raise AuthError("Payload does not look like a credential JSON (expected '{...}').")
+        try:
+            payload = json.loads(raw)
+        except ValueError as exc:
+            raise AuthError(f"Credential JSON is not valid JSON: {exc}.") from exc
+        if not isinstance(payload, dict) or payload.get("type") not in (None, "authorized_user"):
+            raise AuthError(
+                'Credential JSON must be an authorized_user object ("type": "authorized_user").'
+            )
+        if not payload.get("refresh_token"):
+            raise AuthError(
+                "Credential JSON has no refresh_token (an access_token alone cannot be "
+                "refreshed). Run gcloud auth application-default login and paste the "
+                "contents of its ADC file."
+            )
+        creds = Credentials(
+            token=payload.get("access_token"),
+            refresh_token=payload.get("refresh_token"),
+            token_uri=payload.get("token_uri") or TOKEN_URI,
+            client_id=payload.get("client_id") or self._client_id,
+            client_secret=payload.get("client_secret") or self._client_secret,
+            scopes=payload.get("scopes") or SCOPES,
+            quota_project_id=payload.get("quota_project_id"),
+            expiry=None,
+        )
+        self._creds = creds
+        self._store.save_token(_serialize_credentials(creds))
+        return {"connected": True, "source": "credential-json", "quota_project": self.quota_project()}
 
     def disconnect(self) -> None:
         self._store.delete_token()
@@ -199,7 +296,7 @@ class AuthManager:
                     "token may have been revoked or the consent withdrawn — re-run "
                     "/connect to re-authorize."
                 ) from exc
-            self._store.save_token(creds.to_json())
+            self._store.save_token(_serialize_credentials(creds))
             return creds
 
     def access_token_sync_hint(self) -> str | None:

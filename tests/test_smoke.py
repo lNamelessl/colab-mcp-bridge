@@ -61,7 +61,7 @@ def test_consent_url(env):
 
 def test_exchange_carries_matching_redirect(env, monkeypatch):
     """The token request must echo the exact redirect_uri of the auth request."""
-    captured = {}
+    posts = []
 
     class FakeResp:
         status_code = 200
@@ -82,8 +82,7 @@ def test_exchange_carries_matching_redirect(env, monkeypatch):
             return False
 
         async def post(self, url, data=None, headers=None):
-            captured["url"] = url
-            captured["data"] = data
+            posts.append({"url": url, "data": data, "headers": headers})
             return FakeResp()
 
     monkeypatch.setattr("app.auth.httpx.AsyncClient", FakeClient)
@@ -93,11 +92,17 @@ def test_exchange_carries_matching_redirect(env, monkeypatch):
     from app.auth import TOKEN_URI
 
     asyncio.run(env.AUTH.connect("4/0ATESTCODE"))
-    assert captured["url"] == TOKEN_URI
-    assert captured["data"]["redirect_uri"] == "http://localhost:8080"
-    assert captured["data"]["code"] == "4/0ATESTCODE"
-    assert captured["data"]["grant_type"] == "authorization_code"
+    token_posts = [p for p in posts if p["url"] == TOKEN_URI]
+    assert token_posts, "token endpoint was not called"
+    data = token_posts[0]["data"]
+    assert data["redirect_uri"] == "http://localhost:8080"
+    assert data["code"] == "4/0ATESTCODE"
+    assert data["grant_type"] == "authorization_code"
     assert env.AUTH.connected()
+    # the ServiceUsage enable call ran against the quota project afterwards
+    enable_posts = [p for p in posts if "serviceusage" in p["url"]]
+    assert enable_posts, "colaboratory.googleapis.com was not auto-enabled"
+    assert enable_posts[0]["headers"]["x-goog-user-project"] == env.AUTH.quota_project()
 
 
 def test_variant_mapping():
@@ -106,6 +111,48 @@ def test_variant_mapping():
     assert variant_for_accelerator("T4") == "VARIANT_GPU"
     assert variant_for_accelerator("NONE") == "VARIANT_CPU"
     assert variant_for_accelerator("TPU-V6E") == "VARIANT_TPU"
+
+
+def test_quota_project_resolution(env, monkeypatch):
+    from app.auth import DEFAULT_QUOTA_PROJECT
+
+    monkeypatch.delenv("QUOTA_PROJECT_ID", raising=False)
+    assert env.AUTH.quota_project() == DEFAULT_QUOTA_PROJECT
+    monkeypatch.setenv("QUOTA_PROJECT_ID", "my-own-project")
+    env.AUTH._creds = None
+    assert env.AUTH.quota_project() == "my-own-project"
+
+
+def test_credential_json_paste(env, monkeypatch):
+    payload = {
+        "type": "authorized_user",
+        "refresh_token": "1//test-refresh",
+        "client_id": "cid",
+        "client_secret": "csecret",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "scopes": ["openid"],
+        "quota_project_id": "qp-project",
+    }
+    import json as _json
+
+    out = env.AUTH.connect_credentials_json(_json.dumps(payload))
+    assert out["connected"] is True
+    assert out["quota_project"] == "qp-project"
+    assert env.AUTH.connected()
+    # persisted token decrypts back with a refresh token + quota project
+    assert env.AUTH.validate_stored() is True
+    creds = env.AUTH.load_credentials()
+    assert creds.refresh_token == "1//test-refresh"
+    assert creds.quota_project_id == "qp-project"
+    # garbage is rejected
+    import pytest as _pytest
+
+    from app.auth import AuthError
+
+    with _pytest.raises(AuthError):
+        env.AUTH.connect_credentials_json("not-json")
+    with _pytest.raises(AuthError):
+        env.AUTH.connect_credentials_json(_json.dumps({"type": "authorized_user"}))
 
 
 def test_registry_reattach():

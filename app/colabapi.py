@@ -103,39 +103,57 @@ class ColabAPI:
         params: dict | None = None,
         json_body: dict | None = None,
     ) -> dict | None:
-        creds = await self._auth.fresh_credentials()
-        headers = {"Authorization": f"Bearer {creds.token}"}
         client = await self.client()
-        resp = await client.request(
-            method, path, params=params, json=json_body, headers=headers
-        )
-        if resp.status_code in (200, 201):
-            return resp.json() if resp.content else {}
-        if resp.status_code == 204:
-            return None
+        for attempt in (1, 2):
+            creds = await self._auth.fresh_credentials()
+            headers = {
+                "Authorization": f"Bearer {creds.token}",
+                # ADC user credentials need a quota project for
+                # colaboratory.googleapis.com (quirk: 403 SERVICE_DISABLED
+                # "requires a quota project" without it).
+                "x-goog-user-project": self._auth.quota_project(),
+            }
+            resp = await client.request(
+                method, path, params=params, json=json_body, headers=headers
+            )
+            if resp.status_code in (200, 201):
+                return resp.json() if resp.content else {}
+            if resp.status_code == 204:
+                return None
 
-        message, reason = _google_error(resp)
-        if resp.status_code in (401, 403):
+            message, reason = _google_error(resp)
+            # Self-heal: ADC credentials without the Colab API enabled on the
+            # quota project 403 with reason SERVICE_DISABLED — enable once and
+            # retry the original call.
+            if (
+                attempt == 1
+                and resp.status_code == 403
+                and (reason or "").upper() in ("SERVICE_DISABLED", "PERMISSION_DENIED")
+            ):
+                enable = await self._auth.enable_colab_api(force=True)
+                if enable.get("enabled"):
+                    continue
+            if resp.status_code in (401, 403):
+                raise ColabError(
+                    "auth",
+                    message or f"Google authorization rejected (HTTP {resp.status_code})",
+                    status=resp.status_code,
+                )
+            if resp.status_code == 404:
+                raise ColabError(
+                    "gone",
+                    message or "Resource not found (runtime expired/reclaimed or never existed)",
+                    status=404,
+                )
+            if resp.status_code == 429:
+                raise ColabError("rate", message or "Rate limited by Google", status=429)
+            if resp.status_code == 400 and "PERMISSION" in (reason or "").upper():
+                raise ColabError("auth", message or reason or "Permission denied", status=400)
             raise ColabError(
-                "auth",
-                message or f"Google authorization rejected (HTTP {resp.status_code})",
+                "http",
+                message or f"Colab API error (HTTP {resp.status_code})",
                 status=resp.status_code,
             )
-        if resp.status_code == 404:
-            raise ColabError(
-                "gone",
-                message or "Resource not found (runtime expired/reclaimed or never existed)",
-                status=404,
-            )
-        if resp.status_code == 429:
-            raise ColabError("rate", message or "Rate limited by Google", status=429)
-        if resp.status_code == 400 and "PERMISSION" in (reason or "").upper():
-            raise ColabError("auth", message or reason or "Permission denied", status=400)
-        raise ColabError(
-            "http",
-            message or f"Colab API error (HTTP {resp.status_code})",
-            status=resp.status_code,
-        )
 
     # ------------------------------------------------------------------ #
     # v1beta surface
