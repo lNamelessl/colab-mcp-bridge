@@ -64,8 +64,13 @@ MCP_TOKEN = os.environ.get("MCP_TOKEN", "").strip()
 RUNTIME_ID_PIN = os.environ.get("RUNTIME_ID", "").strip()
 DEFAULT_ACCELERATOR = os.environ.get("DEFAULT_ACCELERATOR", "T4").strip().upper()
 DEFAULT_SHAPE = os.environ.get("DEFAULT_SHAPE", "STANDARD").strip().upper()
-EXEC_TIMEOUT_DEFAULT = min(max(int(os.environ.get("EXEC_TIMEOUT_DEFAULT", "600")), 30), 3600)
-EXEC_TIMEOUT_MAX = min(max(int(os.environ.get("EXEC_TIMEOUT_MAX", "3600")), 60), 7200)
+# Single tool-call wait cap stays BELOW the platform edge's ~300 s tolerance
+# for a held-open JSON response (measured 502 at ~500 s): longer jobs return a
+# running snapshot + execution_id, and the identical re-call reattaches while
+# the bridge keeps draining server-side.
+EXEC_TIMEOUT_DEFAULT = min(max(int(os.environ.get("EXEC_TIMEOUT_DEFAULT", "240")), 30), 280)
+EXEC_TIMEOUT_MAX = min(max(int(os.environ.get("EXEC_TIMEOUT_MAX", "280")), 60), 280)
+EXEC_DRAIN_MAX = min(max(int(os.environ.get("EXEC_DRAIN_MAX", "7200")), 300), 86400)
 PORT = int(os.environ.get("PORT", "8000"))
 
 MCP_PATH = f"/{SECRET_PATH}/mcp"
@@ -151,9 +156,11 @@ server = MCPServer(
     instructions=(
         "Execute Python code on the user's own Google Colab GPU runtimes. "
         "colab_execute_code runs code in a named session (state persists per "
-        "session; files persist across sessions on the runtime). Long jobs: if "
-        "the tool returns status=running, re-call with the SAME session_id and "
-        "execution_id to reattach and get more output. colab_file_put/get "
+        "session; files persist across sessions on the runtime). Long jobs: a "
+        "call waits up to 240-280s; if the job still runs, the tool returns "
+        "status=running + execution_id and the job keeps draining — re-call with "
+        "the SAME session_id and execution_id (code can be the same string) to "
+        "reattach and collect more output until complete. colab_file_put/get "
         "transfer files via the Jupyter Contents API (<50 MB per request). "
         "colab_list_runtimes / colab_create_runtime / colab_delete_runtime "
         "manage runtimes (creating falls back through eligible accelerators). "
@@ -177,13 +184,13 @@ def _connected_hint() -> str:
     description=(
         "Execute Python code on a Google Colab runtime and return stdout, stderr "
         "and the last expression's result. State persists per session_id; files "
-        "persist across sessions. For long jobs the tool waits up to timeout_s "
-        "(default 600); if the job is still running it returns status=running "
-        "plus the execution_id — re-call with the SAME session_id and "
-        "execution_id (and the same code or empty reattachment) to reattach and "
-        "collect the rest. Executions on one session run serially. Avoid code "
-        "that triggers Google consent prompts (e.g. drive.mount) — they are "
-        "denied automatically."
+        "persist across sessions. Single calls wait up to timeout_s (default 240, "
+        "max 280 — platform-edge safe); a still-running job returns status=running "
+        "plus the execution_id and KEEPS RUNNING — re-call with the SAME session_id "
+        "and execution_id to reattach and collect partial/final output until it "
+        "completes (drain budget 2 h). Executions on one session run serially. "
+        "Avoid code that triggers Google consent prompts (e.g. drive.mount) — they "
+        "are denied automatically."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True),
 )
@@ -295,11 +302,13 @@ async def _run_execution(record: ExecRecord, session: dict, session_name: str) -
     async with _session_lock(session_name):
         try:
             # sink=record.result accumulates output LIVE so reattachment calls
-            # can read partial output while the job still runs.
+            # can read partial output while the job still runs. The drain
+            # budget is independent of the per-call wait cap (long jobs keep
+            # draining while callers reattach).
             await JUPYTER.execute(
                 record.code,
                 session,
-                wait_s=float(EXEC_TIMEOUT_MAX),
+                wait_s=float(EXEC_DRAIN_MAX),
                 sink=record.result,
             )
         except (ColabError, JupyterError) as exc:

@@ -57,7 +57,7 @@ Replace `<your-domain>`, `<SECRET_PATH>` and `<MCP_TOKEN>` with the values from 
 
 | Tool | What it does |
 |---|---|
-| `colab_execute_code` | Runs Python on the runtime via a Jupyter kernel. Returns stdout/stderr/result. State persists per `session_id`; files persist across sessions. Long jobs: the bridge keeps draining the kernel and waits up to `timeout_s` (default 600 s, max 3600 s) — if the job still runs, it returns `status: running` plus the `execution_id`; re-call with the same `session_id` + `execution_id` to reattach and collect the complete result. Executions on one session run serially. |
+| `colab_execute_code` | Runs Python on the runtime via a Jupyter kernel. Returns stdout/stderr/result. State persists per `session_id`; files persist across sessions. Long jobs: a single call waits up to `timeout_s` (default 240 s, max 280 s — kept below the platform edge's response timeout). A still-running job returns `status: running` plus the `execution_id` and KEEPS DRAINING server-side (2 h budget); re-call with the same `session_id` + `execution_id` to reattach and collect partial/final output until complete. Verified live with a 413 s GPU job past the edge cutoff. Executions on one session run serially. |
 | `colab_file_put` | Writes a file via the Jupyter Contents API (base64, <50 MB per request). |
 | `colab_file_get` | Reads a file via the Jupyter Contents API (base64 + text preview for text files). |
 | `colab_list_runtimes` | Lists the account's runtimes with accelerator specs and proxy-token expiry. |
@@ -83,7 +83,7 @@ colab_execute_code {"code": "import torch; print(torch.cuda.is_available(), torc
 | `RUNTIME_ID` | unset | Optional: pin a specific runtime id across redeploys. |
 | `DEFAULT_ACCELERATOR` | `T4` | Accelerator used when the bridge auto-creates a runtime. |
 | `DEFAULT_SHAPE` | `STANDARD` | Runtime shape (STANDARD / HIGHMEM). |
-| `EXEC_TIMEOUT_DEFAULT` / `EXEC_TIMEOUT_MAX` | `600` / `3600` | Per-call wait bounds for long-running executions. |
+| `EXEC_TIMEOUT_DEFAULT` / `EXEC_TIMEOUT_MAX` | `240` / `280` | Single-call wait bound (edge-safe); longer jobs continue draining server-side and reattach via execution_id. |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` | Google's public cloud-SDK client / `http://localhost:8080` | Override only if you have an allowlisted Colab API client with your own redirect URI. Google's client accepts any localhost port — set `GOOGLE_OAUTH_REDIRECT_URI` (e.g. `http://localhost:9933`) and the /connect page + token exchange stay in sync automatically. |
 | `GOOGLE_CREDENTIALS_JSON` | unset | Headless connect: a full `authorized_user` credential JSON (from `gcloud auth application-default login`). Stored encrypted at boot when no token.enc exists. |
 | `QUOTA_PROJECT_ID` | credential's `quota_project_id` or a default | GCP project used as the Colab API quota project (ADC user credentials 403 SERVICE_DISABLED without one). The /connect flow auto-enables the Colab API on it via ServiceUsage. |

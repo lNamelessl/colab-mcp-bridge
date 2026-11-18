@@ -156,7 +156,18 @@ class JupyterClient:
                 "write the file via execute_code in chunks."
             )
         client = await self.client()
-        url = f"{base}/api/contents/{quote(path.lstrip('/'))}"
+        # Jupyter Contents API does NOT create ancestor directories implicitly
+        # (Colab runtime 500s with "[Errno 2] No such file or directory").
+        clean = path.lstrip("/")
+        parts = [p for p in clean.split("/") if p and p != "."]
+        for i in range(1, len(parts)):
+            d = "/".join(parts[:i])
+            await client.put(
+                f"{base}/api/contents/{quote(d)}",
+                json={"type": "directory"},
+                headers=_proxy_headers(token),
+            )
+        url = f"{base}/api/contents/{quote(clean)}"
         resp = await client.put(
             url,
             json={"type": "file", "format": "base64", "content": content_b64},
